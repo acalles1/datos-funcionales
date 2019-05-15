@@ -1,0 +1,139 @@
+---
+title: "Boxplot Funcional & Outliergram"
+output: html_notebook
+---
+
+```{r}
+
+# CARGANDO LIBRERIAS
+rm(list=ls())
+library("splines")
+library("fda")
+library("roahd")
+
+```
+
+
+### EJEMPLO 1: Datos Crecimiento de Mujeres
+
+```{r}
+
+# DATOS
+heightmat <- growth$hgtf
+
+# COORDENADAS DE LAS MEDICIONES
+age <- growth$age
+
+# BASE SPLINE
+hb12 <- create.bspline.basis(c(1,18),nbasis=12,norder=6)
+
+# OBJETO DATO FUNCIONAL SUAVIZADO
+heightlist <- smooth.basis(age,heightmat,hb12)$fd
+
+# DATOS FUNCIONALES SUAVIZADOS
+Y<-eval.fd(age,heightlist)
+
+# GRÁFICO DE DATOS FUNCIONALES SUAVIZADOS
+par(mfrow=c(1,2),cex=.8)
+matplot(Y,type = "l", main="Datos Suavizados")
+matplot(heightmat, type = "l", main="Datos Crudos")
+
+# BOXPLOT FUNCIONAL
+fnc.bxplt1 <- boxplot.fd(Y, ylim = c(65,185), main="Boxplot Funcional Datos Suavizados")
+
+# OUTLIERGRAM
+outliergram1 <- outliergram(fData(age,t(Y)))
+
+```
+
+### EJEMPLO 2: Datos Precipitaciones de Canadá
+
+```{r}
+
+# DATOS
+logprecav <- CanadianWeather$dailyAv[dayOfYearShifted, , 'log10precip']
+
+# BASE FOURIER
+dayrange = c(0,365)
+daybasis = create.fourier.basis(dayrange,365)
+
+# OBJETO DATO FUNCIONAL SUAVIZADO
+Lcoef = c(0,(2*pi/diff(dayrange))^2,0)
+harmaccelLfd <- vec2Lfd(Lcoef, dayrange)
+lambda <- 1e6
+fdParobj <- fdPar(daybasis, harmaccelLfd, lambda)
+logprec.fit <- smooth.basis(day.5,logprecav,fdParobj)
+logprec.fd <- logprec.fit$fd
+
+# DATOS FUNCIONALES SUAVIZADOS
+Y2 <- eval.fd(day.5, logprec.fd)
+
+# GRÁFICO DE DATOS FUNCIONALES SUAVIZADOS
+par(mfrow=c(1,2),cex=.8)
+matplot(Y2,type = "l", main="Datos Suavizados")
+matplot(logprecav, type = "l", main="Datos Crudos")
+
+# BOXPLOT FUNCIONAL
+fnc.bxplt2 <- boxplot.fd(Y2, ylim = c(-1,1.2), main="Boxplot Funcional Datos Suavizados")
+
+# OUTLIERGRAM
+outliergram2 <- outliergram(fData(seq(1,365),t(Y2)))
+
+```
+
+### EJEMPLO 3: Datos Acciones COLCAP
+
+```{r}
+
+# DATOS
+colcap <- data.matrix(read.delim("COLCAP.txt"))
+
+# COORDENADAS DE LAS MEDICIONES
+años <- seq(1:12)
+
+# BASE SPLINE
+norder <- 8
+nbasis <- norder + length(años) - 2
+colcap.basics <-create.bspline.basis(c(1,12),nbasis,norder,años)
+
+# PENALIZACION POR RUGOSIDAD #
+loglam<-seq(-1,4,0.01)
+nlam<-length(loglam)
+dfsave<-rep(NA,nlam)
+gcvsave<-rep(NA,nlam)
+for (i in 1:nlam) {
+  #cat(paste('log10 lambda=',loglam[i],'\n')) #  cat =concatena e imprime , paste = concatena Strings
+  lambda<-10^loglam[i]
+  colcap.fdPar <- fdPar(colcap.basics,6,lambda) # 4 si norder = 6 ----- 6 si norder = 8 ---- and so on
+  colcap.sb <- smooth.basis(años,colcap,colcap.fdPar)
+  dfsave[i] <- colcap.sb$df
+  gcvsave[i] <- sum(colcap.sb$gcv)
+  
+}
+loglambda.rug <- loglam[gcvsave==min(gcvsave)]
+plot(loglam,gcvsave, main="LogLambda para Penalización por Rugosidad")
+# PENALIZACION POR RUGOSIDAD #
+
+# OBJETO DATO FUNCIONAL SUAVIZADO
+colcap.fdPar <- fdPar(colcap.basics,6,10^loglambda.rug)
+colcap.sb <- smooth.basis(años,colcap,colcap.fdPar)
+#colcap.sb <- smooth.basis(años,colcap,colcap.basics)
+
+#plotfit.fd(colcap,años,colcap.sb$fd)
+
+# DATOS FUNCIONALES SUAVIZADOS
+Y3 <- eval.fd(años,colcap.sb$fd)
+
+# GRÁFICO DE DATOS FUNCIONALES SUAVIZADOS
+par(mfrow=c(1,2),cex=.8)
+matplot(Y3,type = "l", ylim = c(-0.5,0.2), main="Datos Suavizados")
+matplot(colcap,type = "l", main="Datos Crudos")
+
+# BOXPLOT FUNCIONAL
+fnc.bxplt3 <- boxplot.fd(Y3, ylim = c(-0.5,0.2), main="Boxplot Funcional Datos Suavizados")
+
+# OUTLIERGRAM
+outliergram1 <- outliergram(fData(años,t(Y3)))
+
+```
+
