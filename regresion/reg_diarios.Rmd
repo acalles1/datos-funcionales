@@ -1,0 +1,295 @@
+---
+title: "Regresión funcional con regresores escalares y respuesta funcional"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Regresion funcional para los datos Colcacap
+
+Primero, cargando algunas librerías que me serán útiles: 
+
+```{r, echo=FALSE}
+library(splines)
+library(fda)
+library(openxlsx)
+library(fda.usc)
+```
+
+Ahora, leemos los datos que están en un archivo .xlsx del directorio en el que estamos, y los visualizamos.
+
+```{r}
+data <- read.xlsx("acciones.xlsx", rowNames=TRUE)
+fsample <- fdata(t(data))
+plot(fsample)
+```
+
+Vemos que están en escalas muy diferentes, entonces un análisis estadístico a los datos así crudos quizás no sea lo más recomendable. Mejor, consideremos los retornos diarios. 
+
+
+```{r}
+dims <- dim(data)
+n <- dims[1]
+m <- dims[2]
+returns <- matrix(rep(0, len=(n-2)*m), nrow=(n-2), ncol=m)
+
+for (i in 2:n-1){
+  for (j in 1:m){
+    returns[i-1, j] <- (data[i, j] - data[i-1, j])/data[i-1, j]
+  }
+}
+
+day.5 <- 1:280 - 0.5
+fsample2 <- fdata(t(returns), day.5)
+plot(fsample2)
+```
+Ahora, queremos suavizar los datos. Escojamos el número de bases: intentemos con 6 hasta 200 y cojamos el número que tenga menos error cuadrático medio
+
+```{r}
+rmse <- numeric(194) #vamos de 6 a 200
+for (i in 6:200){
+  nbasis <- i
+  smallbasis <- create.bspline.basis(c(0, 280), nbasis)
+  smoothed   <- smooth.basis(day.5, returns, smallbasis)$fd
+  Y <- eval.fd(day.5 , smoothed)
+  rmse[i-5] <- sqrt(mean(Y-returns)^2)
+}
+
+plot(6:200, rmse, type='l')
+nbasis <- which.min(rmse)
+```
+
+Ahora veamos que lambda escogemos para penalizar por rugosidad
+
+```{r}
+colcap.basics <- create.bspline.basis(c(0, 280), nbasis)
+
+loglam<-seq(-5,10,0.2)
+nlam<-length(loglam)
+dfsave<-rep(NA,nlam)
+gcvsave<-rep(NA,nlam)
+
+for (i in 1:nlam) {
+  #print(i)
+  #cat(paste('log10 lambda=',loglam[i],'\n')) #  cat =concatena e imprime , paste = concatena Strings
+  lambda<-10^loglam[i]
+  colcap.fdPar <- fdPar(colcap.basics, 2, lambda) # 4 si norder = 6 ----- 6 si norder = 8 ---- and so on
+  colcap.sb <- smooth.basis(day.5,returns,colcap.fdPar)
+  dfsave[i] <- colcap.sb$df
+  gcvsave[i] <- sum(colcap.sb$gcv)
+  loglambda.rug <- loglam[gcvsave==min(gcvsave)]
+  loglam.rugmin <- min(loglambda.rug)
+}
+plot(loglam,gcvsave, main="LogLambda para Penalización por Rugosidad")
+
+```
+
+Veamos como se ve uno de los datos suavizados para el lambda y el número de bases que escogimos:
+
+```{r}
+ej.fdPar <- fdPar(colcap.basics, 2, loglam.rugmin)
+ej.sb <- smooth.basis(day.5, returns[,1], ej.fdPar)$fd
+ej.eval <- eval.fd(day.5, ej.sb)
+plot(returns[,1])
+lines(ej.eval, lwd=3)
+
+```
+
+Ahora, veamos como se ven todos los datos suavizados encima de los datos crudos:
+
+```{r}
+colcap.fdPar <- fdPar(colcap.basics, 2, loglam.rugmin)
+
+colcap.sb <- smooth.basis(day.5, returns, colcap.fdPar)$fd
+y2cMap <- smooth.basis(day.5, returns, colcap.fdPar)$y2cMap
+accionesfd <- colcap.sb
+acciones.eval <- eval.fd(day.5, colcap.sb)
+cols = sample(colours(), 25)
+plot(day.5, returns[,1], type='l', lty=5, col=cols[1])
+for (i in 2:25){
+  lines(day.5, returns[,i], lty=5, col=cols[i])
+}
+matlines(day.5, acciones.eval, type='l', lty=1, lwd=2)
+```
+
+
+```{r}
+#Voy a considerar los siguientes sectores:
+#Financiero
+#Minero: Minero, energético e 
+#Construcción
+#Otros: Comercio + Transporte + Telecomunicaciones + Industrial
+sectores <- c("Financiero", "Minero", "Financiero", "Financiero", "Minero", 
+              "Otros", "Minero", "Construccion", "Financiero", "Financiero",
+              "Construccion", "Financiero", "Construccion", "Otros", "Minero",
+              "Financiero", "Financiero", "Construccion", "Construccion",
+              "Otros", "Financiero", "Minero", "Financiero", "Construccion",
+              "Otros")
+
+index = 1:25
+
+# vector que indica cuales valores corresponden a que sector
+finidx <- index[sectores == "Financiero"]
+minidx <- index[sectores == "Minero"]
+conidx <- index[sectores == "Construccion"]
+otridx <- index[sectores == "Otros"]
+
+zmat <- matrix(0,25,5)
+zmat[      ,1] <- 1
+zmat[finidx,2] <- 1
+zmat[minidx,3] <- 1
+zmat[conidx,4] <- 1
+zmat[otridx,5] <- 1
+
+z26    <- matrix(1,1,5)
+z26[1] <- 0
+zmat   <- rbind(zmat, z26)
+
+coef   <- accionesfd$coefs
+coef26 <- cbind(coef,matrix(0,nbasis,1)) # concatena un vector de 65x1 de ceros
+accionesfd$coefs <- coef26
+
+p <- 5
+xfdlist <- vector("list",p)
+for (j in 1:p){
+  xfdlist[[j]] <- zmat[,j]
+} 
+
+
+nbasisbetas <- nbasis
+basisbetas <- create.bspline.basis(rangeval=c(0,280), nbasisbetas)
+
+betafd <- fd(matrix(0, nbasisbetas, 1), basisbetas)
+
+betapar <- fdPar(betafd)
+
+betalist <- vector("list",p)
+for (j in 1:p){
+  betalist[[j]] <- betapar
+} 
+
+fRegressList <- fRegress(accionesfd, xfdlist, betalist)
+betaestlist <- fRegressList$betaestlist
+zonenames <- c("Acciones",
+               "Financiero", "Minero ", "Construcción", "Otros")
+
+```
+ Y veamos los betas para cada sector:
+ 
+```{r}
+  betaestParfdj <- betaestlist[[1]]
+  plot(betaestParfdj$fd, xlab="Dia", ylab="acciones",main=zonenames[1])
+```
+```{r, echo=FALSE}
+  betaestParfdj <- betaestlist[[2]]
+  plot(betaestParfdj$fd, xlab="Dia", ylab="acciones",main=zonenames[2])
+```
+```{r, echo=FALSE}
+  betaestParfdj <- betaestlist[[3]]
+  plot(betaestParfdj$fd, xlab="Dia", ylab="acciones",main=zonenames[3])
+```
+```{r, echo=FALSE}
+  betaestParfdj <- betaestlist[[4]]
+  plot(betaestParfdj$fd, xlab="Dia", ylab="acciones",main=zonenames[4])
+```
+```{r, echo=FALSE}
+  betaestParfdj <- betaestlist[[5]]
+  plot(betaestParfdj$fd, xlab="Dia", ylab="acciones",main=zonenames[5])
+```
+
+Y predicha
+
+```{r}
+yhatfdobj <- fRegressList$yhatfdobj # objeto de parametros funcionales
+plot(yhatfdobj,main='Retornos predichos')
+```
+
+Veamos los errores estándar:
+
+```{r}
+yhatmat <- predict(yhatfdobj, day.5)
+ymat    <- eval.fd(day.5, accionesfd)
+matdiff <- ymat[,1:25] - yhatmat[,1:25] # matriz de dimension (280 x 25)
+SigmaE  <- var(t(matdiff))             # matriz de dimension (280 x 280)
+
+stddevE <- sqrt(diag(SigmaE))
+plot(day.5, stddevE, type="l",xlab="Díaa", ylab="Retornos")
+```
+Intervalos de confianza
+
+```{r}
+stderrList <- fRegress.stderr(fRegressList, y2cMap, SigmaE)
+betastderrlist <- stderrList$betastderrlist
+```
+
+```{r}
+  betafdParj  <- betaestlist[[1]]
+  betafdj     <- betafdParj$fd   # objeto que contiene los betas
+  betaj       <- eval.fd(day.5, betafdj) # evaluamos el objeto que contiene los betas  en day.5
+  betastderrj <- eval.fd(day.5, betastderrlist[[1]]) # evaluamos el objeto
+  # que contiene las desviaciones estandar
+  # construimos el intervalo de confianza de dos desviaciones estandar
+  matplot(day.5, cbind(betaj, betaj+2*betastderrj, betaj-2*betastderrj),
+          type="l",lty=c(1,4,4), xlab="Day", ylab="Reg. Coeff.",
+          main=zonenames[1])
+  aux <- numeric(280)
+  lines(0:279, aux, lty = 2)
+```
+
+```{r, echo=FALSE}
+  betafdParj  <- betaestlist[[2]]
+  betafdj     <- betafdParj$fd   # objeto que contiene los betas
+  betaj       <- eval.fd(day.5, betafdj) # evaluamos el objeto que contiene los betas  en day.5
+  betastderrj <- eval.fd(day.5, betastderrlist[[2]]) # evaluamos el objeto
+  # que contiene las desviaciones estandar
+  # construimos el intervalo de confianza de dos desviaciones estandar
+  matplot(day.5, cbind(betaj, betaj+2*betastderrj, betaj-2*betastderrj),
+          type="l",lty=c(1,4,4), xlab="Day", ylab="Reg. Coeff.",
+          main=zonenames[2])
+  aux <- numeric(280)
+  lines(0:279, aux, lty = 2)
+```
+
+```{r, echo=FALSE}
+  betafdParj  <- betaestlist[[3]]
+  betafdj     <- betafdParj$fd   # objeto que contiene los betas
+  betaj       <- eval.fd(day.5, betafdj) # evaluamos el objeto que contiene los betas  en day.5
+  betastderrj <- eval.fd(day.5, betastderrlist[[3]]) # evaluamos el objeto
+  # que contiene las desviaciones estandar
+  # construimos el intervalo de confianza de dos desviaciones estandar
+  matplot(day.5, cbind(betaj, betaj+2*betastderrj, betaj-2*betastderrj),
+          type="l",lty=c(1,4,4), xlab="Day", ylab="Reg. Coeff.",
+          main=zonenames[3])
+  aux <- numeric(280)
+  lines(0:279, aux, lty = 2)
+```
+
+```{r, echo=FALSE}
+  betafdParj  <- betaestlist[[4]]
+  betafdj     <- betafdParj$fd   # objeto que contiene los betas
+  betaj       <- eval.fd(day.5, betafdj) # evaluamos el objeto que contiene los betas  en day.5
+  betastderrj <- eval.fd(day.5, betastderrlist[[4]]) # evaluamos el objeto
+  # que contiene las desviaciones estandar
+  # construimos el intervalo de confianza de dos desviaciones estandar
+  matplot(day.5, cbind(betaj, betaj+2*betastderrj, betaj-2*betastderrj),
+          type="l",lty=c(1,4,4), xlab="Day", ylab="Reg. Coeff.",
+          main=zonenames[4])
+  aux <- numeric(280)
+  lines(0:279, aux, lty = 2)
+```
+
+```{r, echo=FALSE}
+  betafdParj  <- betaestlist[[5]]
+  betafdj     <- betafdParj$fd   # objeto que contiene los betas
+  betaj       <- eval.fd(day.5, betafdj) # evaluamos el objeto que contiene los betas  en day.5
+  betastderrj <- eval.fd(day.5, betastderrlist[[5]]) # evaluamos el objeto
+  # que contiene las desviaciones estandar
+  # construimos el intervalo de confianza de dos desviaciones estandar
+  matplot(day.5, cbind(betaj, betaj+2*betastderrj, betaj-2*betastderrj),
+          type="l",lty=c(1,4,4), xlab="Day", ylab="Reg. Coeff.",
+          main=zonenames[5])
+  aux <- numeric(280)
+  lines(0:279, aux, lty = 2)
+```

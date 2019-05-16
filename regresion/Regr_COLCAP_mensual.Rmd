@@ -1,0 +1,230 @@
+---
+title: "Regresión Funcional: Datos COLCAP Mensuales"
+output: html_notebook
+---
+
+```{r}
+
+# CARGANDO LIBRERIAS
+rm(list=ls())
+library("splines")
+library("fda")
+library("roahd")
+
+```
+
+
+### LEEMOS DATOS Y REALIZAMOS UN SUAVIZADO
+
+```{r}
+
+# DATOS
+colcap <- data.matrix(read.delim("COLCAP.txt"))
+
+# COORDENADAS DE LAS MEDICIONES
+años <- seq(1:12)
+
+# BASE SPLINE
+norder <- 8
+nbasis <- norder + length(años) - 2
+colcap.basics <-create.bspline.basis(c(1,12),nbasis,norder,años)
+
+# PENALIZACION POR RUGOSIDAD #
+loglam<-seq(-1,4,0.01)
+nlam<-length(loglam)
+dfsave<-rep(NA,nlam)
+gcvsave<-rep(NA,nlam)
+for (i in 1:nlam) {
+  #cat(paste('log10 lambda=',loglam[i],'\n')) #  cat =concatena e imprime , paste = concatena Strings
+  lambda<-10^loglam[i]
+  colcap.fdPar <- fdPar(colcap.basics,6,lambda) # 4 si norder = 6 ----- 6 si norder = 8 ---- and so on
+  colcap.sb <- smooth.basis(años,colcap,colcap.fdPar)
+  dfsave[i] <- colcap.sb$df
+  gcvsave[i] <- sum(colcap.sb$gcv)
+  
+}
+loglambda.rug <- loglam[gcvsave==min(gcvsave)]
+plot(loglam,gcvsave, main="LogLambda para Penalización por Rugosidad")
+# PENALIZACION POR RUGOSIDAD #
+
+# OBJETO DATO FUNCIONAL SUAVIZADO
+colcap.fdPar <- fdPar(colcap.basics,6,10^loglambda.rug)
+colcap.sb <- smooth.basis(años,colcap,colcap.fdPar)
+#colcap.sb <- smooth.basis(años,colcap,colcap.basics)
+
+plotfit.fd(colcap,años,colcap.sb$fd)
+
+# DATOS FUNCIONALES SUAVIZADOS
+colcap.fd <- colcap.sb$fd
+Y3 <- eval.fd(años,colcap.sb$fd)
+
+```
+
+### ALGUNOS ESTADÍSTICOS FUNCIONALES
+
+```{r}
+
+# MEDIA DE DATOS FUNCIONALES
+meanCOLCAP <- mean(colcap.fd)
+plot(meanCOLCAP)
+
+# DESVIACION ESTANDAR DE DATOS FUNCIONALES
+stdCOLCAP <- std.fd(colcap.fd)
+plot(stdCOLCAP)
+
+# COVARIANZA DE DATOS FUNCIONALES
+COLCAPvar.bifd <- var.fd(colcap.fd)
+weektime <- seq(1,12,0.3)
+
+COLCAPvar_mat <- eval.bifd(weektime,weektime,COLCAPvar.bifd)
+persp(weektime, weektime, COLCAPvar_mat,theta=-45, phi=25, r=3, expand = 0.5, ticktype='detailed')
+
+# CORRELACION DE DATOS FUNCIONALES
+COLCAPvar.cor <- cor.fd(weektime,colcap.fd)
+persp(weektime, weektime, COLCAPvar.cor,theta=-45, phi=25, r=3, expand = 0.5, ticktype='detailed')
+
+```
+
+### MODELO DE REGRESIÓN
+
+```{r}
+
+# requerimos a colcap.fd
+
+y2cMap <- colcap.sb$y2cMap
+sectores <- c("Financiero", "Minero", "Financiero", "Financiero", "Minero", 
+              "Otros", "Minero", "Construccion", "Financiero", "Financiero",
+              "Construccion", "Financiero", "Construccion", "Otros", "Minero",
+              "Financiero", "Financiero", "Construccion", "Construccion",
+              "Otros", "Financiero", "Minero", "Financiero", "Construccion",
+              "Otros")
+index = 1:25
+
+# Vector que indica cuales valores corresponden a que sector
+finidx <- index[sectores == "Financiero"]
+minidx <- index[sectores == "Minero"]
+conidx <- index[sectores == "Construccion"]
+otridx <- index[sectores == "Otros"]
+
+# Matriz de Diseño que tiene una columna para la gran media y una columna para cada efecto del sector
+zmat <- matrix(0,25,5)
+zmat[      ,1] <- 1
+zmat[finidx,2] <- 1
+zmat[minidx,3] <- 1
+zmat[conidx,4] <- 1
+zmat[otridx,5] <- 1
+
+# Se adiciona una fila de 0, 1, 1, 1, 1 para forzar los efectos zona a sumar cero.
+z26    <- matrix(1,1,5)
+z26[1] <- 0
+zmat   <- rbind(zmat, z26)
+
+# Se aumenta el objeto de datos funcional incluyendo una observacion adicional, la observacion 26 que toma el valor de cero para cumplir con la restriccion
+coef   <- colcap.fd$coefs
+coef26 <- cbind(coef,matrix(0,nbasis,1))
+colcap.fd$coefs <- coef26
+
+#Se crea un objeto de parametros funcionales para cada una de las funciones de coefcientes usando usando 11 funciones de base de fourier para cada una
+p <- 5
+xfdlist <- vector("list",p)
+for (j in 1:p){
+  xfdlist[[j]] <- zmat[,j]
+} 
+
+nbasisbetas <- nbasis
+basisbetas <- create.bspline.basis(c(1,12),nbasisbetas)
+
+betafd <- fd(matrix(0, nbasisbetas, 1), basisbetas)
+
+betapar <- fdPar(betafd)
+
+betalist <- vector("list",p)
+for (j in 1:p){
+  betalist[[j]] <- betapar
+} 
+
+fRegressList <- fRegress(colcap.fd, xfdlist, betalist)
+betaestlist <- fRegressList$betaestlist
+zonenames <- c("Acciones","Financiero","Minero","Construccion","Otros")
+
+# BETAS PARA CADA SECTOR ECONÓMICO
+betaestParfdj <- betaestlist[[1]]
+plot(betaestParfdj$fd, xlab="Dia", ylab="acciones",main=zonenames[1])
+
+betaestParfdj <- betaestlist[[2]]
+plot(betaestParfdj$fd, xlab="Dia", ylab="acciones",main=zonenames[2])
+
+betaestParfdj <- betaestlist[[3]]
+plot(betaestParfdj$fd, xlab="Dia", ylab="acciones",main=zonenames[3])
+
+betaestParfdj <- betaestlist[[4]]
+plot(betaestParfdj$fd, xlab="Dia", ylab="acciones",main=zonenames[4])
+
+betaestParfdj <- betaestlist[[5]]
+plot(betaestParfdj$fd, xlab="Dia", ylab="acciones",main=zonenames[5])
+
+# VALORES PREDICHOS
+yhatfdobj <- fRegressList$yhatfdobj # objeto de parametros funcionales
+plot(yhatfdobj,main='Rentabilidades Predichas')
+
+# ERRORES ESTÁNDAR
+yhatmat <- predict(yhatfdobj, seq(1,12))
+ymat    <- eval.fd(seq(1,12), colcap.fd)
+matdiff <- ymat[,1:25] - yhatmat[,1:25] # matriz de dimension (280 x 25)
+SigmaE  <- var(t(matdiff))             # matriz de dimension (280 x 280)
+
+stddevE <- sqrt(diag(SigmaE))
+plot(seq(1,12), stddevE, type="l",xlab="Día", ylab="Rentabilidades")
+
+# CÁLCULO DE INTERVALOS DE CONFIANZA
+stderrList <- fRegress.stderr(fRegressList, y2cMap, SigmaE)
+betastderrlist <- stderrList$betastderrlist
+
+  # GRÁFICO DE INTERVALOS DE CONFIANZA
+  betafdParj  <- betaestlist[[1]]
+  betafdj     <- betafdParj$fd   # objeto que contiene los betas
+  betaj       <- eval.fd(seq(1,12), betafdj) # evaluamos el objeto que contiene los betas  en day.5
+  betastderrj <- eval.fd(seq(1,12), betastderrlist[[1]]) # evaluamos el objeto que contiene las desviaciones estandar
+  # construimos el intervalo de confianza de dos desviaciones estandar
+  matplot(seq(1,12), cbind(betaj, betaj+3*betastderrj, betaj-3*betastderrj),type="l",lty=c(1,4,4), xlab="Day", ylab="Reg. Coeff.",main=zonenames[1])
+  aux <- numeric(12)
+  lines(0:11, aux, lty = 2)
+  
+  betafdParj  <- betaestlist[[2]]
+  betafdj     <- betafdParj$fd
+  betaj       <- eval.fd(seq(1,12), betafdj)
+  betastderrj <- eval.fd(seq(1,12), betastderrlist[[2]])
+  # construimos el intervalo de confianza de dos desviaciones estandar
+  matplot(seq(1,12), cbind(betaj, betaj+3*betastderrj, betaj-3*betastderrj),type="l",lty=c(1,4,4), xlab="Day", ylab="Reg. Coeff.",main=zonenames[2])
+  aux <- numeric(12)
+  lines(0:11, aux, lty = 2)
+  
+  betafdParj  <- betaestlist[[3]]
+  betafdj     <- betafdParj$fd
+  betaj       <- eval.fd(seq(1,12), betafdj)
+  betastderrj <- eval.fd(seq(1,12), betastderrlist[[3]])
+  # construimos el intervalo de confianza de dos desviaciones estandar
+  matplot(seq(1,12), cbind(betaj, betaj+3*betastderrj, betaj-3*betastderrj),type="l",lty=c(1,4,4), xlab="Day", ylab="Reg. Coeff.",main=zonenames[3])
+  aux <- numeric(12)
+  lines(0:11, aux, lty = 2)
+  
+  betafdParj  <- betaestlist[[4]]
+  betafdj     <- betafdParj$fd
+  betaj       <- eval.fd(seq(1,12), betafdj)
+  betastderrj <- eval.fd(seq(1,12), betastderrlist[[4]])
+  # construimos el intervalo de confianza de dos desviaciones estandar
+  matplot(seq(1,12), cbind(betaj, betaj+3*betastderrj, betaj-3*betastderrj),type="l",lty=c(1,4,4), xlab="Day", ylab="Reg. Coeff.",main=zonenames[4])
+  aux <- numeric(12)
+  lines(0:11, aux, lty = 2)
+  
+  betafdParj  <- betaestlist[[5]]
+  betafdj     <- betafdParj$fd
+  betaj       <- eval.fd(seq(1,12), betafdj)
+  betastderrj <- eval.fd(seq(1,12), betastderrlist[[5]])
+  # construimos el intervalo de confianza de dos desviaciones estandar
+  matplot(seq(1,12), cbind(betaj, betaj+3*betastderrj, betaj-2*betastderrj),type="l",lty=c(1,4,4), xlab="Day", ylab="Reg. Coeff.",main=zonenames[5])
+  aux <- numeric(12)
+  lines(0:11, aux, lty = 2)
+
+```
+
